@@ -1,22 +1,22 @@
 const express = require('express');
 const server = express();
 
-// Replace this with your own secret token (must match Google Apps Script)
+// Optional: keep token check if you want some minimal security
 const SECRET_TOKEN = "TheEgyptianCat252025";
 
 server.all('/', (req, res) => {
   res.send('✅ Bot is alive!');
 });
 
-// Ping endpoint — secured with token
+// Make /ping always respond with 200 OK
 server.get('/ping', (req, res) => {
   const token = req.query.token;
-  if (token === SECRET_TOKEN) {
-    console.log("Ping received from Apps Script ✅");
-    return res.status(200).send("Pong!");
+  if (!token || token !== SECRET_TOKEN) {
+    console.warn("Ping received without valid token — accepted anyway to keep alive.");
+    return res.status(200).send("Pong (unauthorized, but keeping alive).");
   } else {
-    console.warn("Unauthorized ping attempt 🚫");
-    return res.status(403).send("Not allowed");
+    console.log("Ping received from Google Apps Script ✅");
+    return res.status(200).send("Pong (authorized).");
   }
 });
 
