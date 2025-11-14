@@ -3,7 +3,7 @@ const keepAlive = require('./keep_alive.js');
 keepAlive();
 
 // Discord and Enmap
-const { Client, GatewayIntentBits, Partials, PermissionsBitField } = require('discord.js');
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const Enmap = require('enmap').default;
 
 const client = new Client({
@@ -19,8 +19,9 @@ const client = new Client({
 });
 
 // -------------------- CONFIG --------------------
-const dashboardChannelId = '1426096588509548636';
-const ABSTRACTED_ROLE = "1438761961897852958"; // << abstracted role ID
+const directoryChannelId = '1426096588509548636'; // audit logs
+const dashboardChannelId = '1438801491052990556'; // status messages
+const ABSTRACTED_ROLE = "1438761961897852958"; // abstracted role
 
 const slots = [
     { name: "Anaxagoras", channelId: "1406663875855650977", roleId: "1426087099521830973", accessRoleId: "1406631086926069863", emoji: "✅", statusMessageId: "1426091781061214262", timer: null },
@@ -57,11 +58,8 @@ function formatDuration(ms) {
 
 async function sendLoginMessage(channel, member, slotName) {
     const isAbstracted = member.roles.cache.has(ABSTRACTED_ROLE);
-    if (isAbstracted) {
-        return channel.send(`An **abstracted user** is now logged into **${slotName}**!`);
-    } else {
-        return channel.send(`<@${member.id}> is now logged into **${slotName}**!`);
-    }
+    if (isAbstracted) return channel.send(`An **abstracted user** is now logged into **${slotName}**!`);
+    return channel.send(`<@${member.id}> is now logged into **${slotName}**!`);
 }
 
 // -------------------- TIMER --------------------
@@ -96,11 +94,8 @@ client.once('clientReady', async () => {
 
     for (const slot of slots) {
         const channel = await client.channels.fetch(slot.channelId);
-        let message;
-        try { message = await channel.messages.fetch(slot.statusMessageId); } 
+        try { await channel.messages.fetch(slot.statusMessageId); } 
         catch { console.error(`Status message missing for ${slot.name}`); continue; }
-
-        if (!message.reactions.cache.has(slot.emoji)) await message.react(slot.emoji);
 
         const stored = slotDB.get(slot.name);
         if (stored?.claimedUserId) {
@@ -108,26 +103,14 @@ client.once('clientReady', async () => {
                 const member = await channel.guild.members.fetch(stored.claimedUserId);
                 if (!member.roles.cache.has(slot.roleId)) await member.roles.add(slot.roleId);
 
-                let loginMsgChannel, loginMsgDashboard;
-                try {
-                    loginMsgChannel = await channel.messages.fetch(stored.loginMessageIdChannel);
-                    loginMsgDashboard = await (await client.channels.fetch(dashboardChannelId)).messages.fetch(stored.loginMessageIdDashboard);
-                } catch {
-                    loginMsgChannel = await sendLoginMessage(channel, member, slot.name);
-                    const dashboardChannel = await client.channels.fetch(dashboardChannelId);
-                    loginMsgDashboard = await sendLoginMessage(dashboardChannel, member, slot.name);
-                    stored.loginMessageIdChannel = loginMsgChannel.id;
-                    stored.loginMessageIdDashboard = loginMsgDashboard.id;
-                    slotDB.set(slot.name, stored);
-                }
+                // Try restoring login messages (ignore if fail)
+                try { await channel.messages.fetch(stored.loginMessageIdChannel); } catch {}
+                try { const dashCh = await client.channels.fetch(dashboardChannelId); await dashCh.messages.fetch(stored.loginMessageIdDashboard); } catch {}
 
                 const elapsed = Date.now() - stored.claimedAt;
-                const remaining = Math.max(0, 4*3600*1000 - elapsed);
-                startTimer(slot, remaining);
+                startTimer(slot, Math.max(0, 4*3600*1000 - elapsed));
 
-            } catch (err) {
-                console.error(`Failed to restore slot ${slot.name}:`, err);
-            }
+            } catch (err) { console.error(`Failed to restore slot ${slot.name}:`, err); }
         }
     }
 });
@@ -146,11 +129,11 @@ client.on('messageReactionAdd', async (reaction, user) => {
         const member = await reaction.message.guild.members.fetch(user.id);
         await member.roles.add(slot.roleId);
 
-        // Change View Channel permission to DENY for accessRole
+        // Change channel permission for accessRoleId
         const channel = await client.channels.fetch(slot.channelId);
         await channel.permissionOverwrites.edit(slot.accessRoleId, { ViewChannel: false });
 
-        // Send login messages to both channels
+        // Send login messages
         const loginMsgChannel = await sendLoginMessage(channel, member, slot.name);
         const dashboardChannel = await client.channels.fetch(dashboardChannelId);
         const loginMsgDashboard = await sendLoginMessage(dashboardChannel, member, slot.name);
@@ -186,32 +169,20 @@ client.on('messageReactionRemove', async (reaction, user) => {
 
     await member.roles.remove(slot.roleId);
 
-    // Undo View Channel deny permission
+    // Undo channel permission
     const channel = await client.channels.fetch(slot.channelId);
     await channel.permissionOverwrites.edit(slot.accessRoleId, { ViewChannel: true });
 
-    // Delete previous login messages from both channels
-    if (stored.loginMessageIdChannel) {
-        try {
-            const msg = await channel.messages.fetch(stored.loginMessageIdChannel);
-            if (msg) await msg.delete();
-        } catch {}
-    }
-    if (stored.loginMessageIdDashboard) {
-        try {
-            const dashboardChannel = await client.channels.fetch(dashboardChannelId);
-            const msg = await dashboardChannel.messages.fetch(stored.loginMessageIdDashboard);
-            if (msg) await msg.delete();
-        } catch {}
-    }
+    // Delete previous login messages
+    if (stored.loginMessageIdChannel) { try { const msg = await channel.messages.fetch(stored.loginMessageIdChannel); if(msg) await msg.delete(); } catch {} }
+    if (stored.loginMessageIdDashboard) { try { const dashCh = await client.channels.fetch(dashboardChannelId); const msg = await dashCh.messages.fetch(stored.loginMessageIdDashboard); if(msg) await msg.delete(); } catch {} }
 
     if (slot.timer) { clearTimeout(slot.timer); clearInterval(slot.timer); slot.timer = null; }
 
-    const log = await client.channels.fetch(dashboardChannelId);
-
+    // Send audit log to directory channel
+    const log = await client.channels.fetch(directoryChannelId);
     const login = stored.claimedAt;
     const logout = Date.now();
-
     const isAbstracted = member.roles.cache.has(ABSTRACTED_ROLE);
     const hidden = `||<@${stored.claimedUserId}>||`;
 
@@ -219,10 +190,10 @@ client.on('messageReactionRemove', async (reaction, user) => {
         `Slot: ${slot.name}\nUser: ${isAbstracted ? `${hidden} (abstracted user)` : `<@${stored.claimedUserId}>`}\nLogin Time: ${formatDate(login)}\nLogout Time: ${formatDate(logout)}\nTotal Time Played: ${formatDuration(logout-login)}`
     );
 
-    // Send “slot free” to both channels, delete after 10s
+    // Send "slot free" to both channels, delete after 10s
     const freeMsgChannel = await channel.send(`**${slot.name}** slot is now free.`);
-    const dashboardChannel = await client.channels.fetch(dashboardChannelId);
-    const freeMsgDashboard = await dashboardChannel.send(`**${slot.name}** slot is now free.`);
+    const dashCh = await client.channels.fetch(dashboardChannelId);
+    const freeMsgDashboard = await dashCh.send(`**${slot.name}** slot is now free.`);
     setTimeout(() => { freeMsgChannel.delete().catch(()=>{}); freeMsgDashboard.delete().catch(()=>{}); }, 10000);
 
     slotDB.set(slot.name, {
@@ -241,8 +212,7 @@ client.on('messageCreate', async message => {
     const cmd = args.shift().toLowerCase();
 
     if (cmd === '!free') {
-        if (!message.member.permissions.has('Administrator'))
-            return message.reply("You don't have permission.");
+        if (!message.member.permissions.has('Administrator')) return message.reply("You don't have permission.");
 
         const slotName = args[0];
         const slot = slots.find(s => s.name.toLowerCase() === slotName?.toLowerCase());
@@ -254,21 +224,15 @@ client.on('messageCreate', async message => {
         const member = await message.guild.members.fetch(stored.claimedUserId);
         await member.roles.remove(slot.roleId);
 
-        // Undo channel permission
         const channel = await client.channels.fetch(slot.channelId);
         await channel.permissionOverwrites.edit(slot.accessRoleId, { ViewChannel: true });
 
-        // Delete login messages
-        if (stored.loginMessageIdChannel) {
-            try { const msg = await channel.messages.fetch(stored.loginMessageIdChannel); if(msg) await msg.delete(); } catch {}
-        }
-        if (stored.loginMessageIdDashboard) {
-            try { const dashCh = await client.channels.fetch(dashboardChannelId); const msg = await dashCh.messages.fetch(stored.loginMessageIdDashboard); if(msg) await msg.delete(); } catch {}
-        }
+        if (stored.loginMessageIdChannel) { try { const msg = await channel.messages.fetch(stored.loginMessageIdChannel); if(msg) await msg.delete(); } catch {} }
+        if (stored.loginMessageIdDashboard) { try { const dashCh = await client.channels.fetch(dashboardChannelId); const msg = await dashCh.messages.fetch(stored.loginMessageIdDashboard); if(msg) await msg.delete(); } catch {} }
 
         if (slot.timer) { clearTimeout(slot.timer); clearInterval(slot.timer); slot.timer = null; }
 
-        const log = await client.channels.fetch(dashboardChannelId);
+        const log = await client.channels.fetch(directoryChannelId);
         const login = stored.claimedAt;
         const logout = Date.now();
         const isAbstracted = member.roles.cache.has(ABSTRACTED_ROLE);
@@ -278,38 +242,29 @@ client.on('messageCreate', async message => {
             `Slot: ${slot.name}\nUser: ${isAbstracted ? `${hidden} (abstracted user)` : `<@${stored.claimedUserId}>`}\nLogin Time: ${formatDate(login)}\nLogout Time: ${formatDate(logout)}\nTotal Time Played: ${formatDuration(logout-login)}`
         );
 
-        // Send slot free messages to both channels
+        // Slot free messages
         const freeMsgChannel = await channel.send(`**${slot.name}** slot is now free.`);
         const dashCh = await client.channels.fetch(dashboardChannelId);
         const freeMsgDashboard = await dashCh.send(`**${slot.name}** slot is now free.`);
-        setTimeout(()=>{ freeMsgChannel.delete().catch(()=>{}); freeMsgDashboard.delete().catch(()=>{}); }, 10000);
+        setTimeout(() => { freeMsgChannel.delete().catch(()=>{}); freeMsgDashboard.delete().catch(()=>{}); }, 10000);
 
         return message.reply(`${slot.name} slot has been force freed.`);
     }
 
     if (cmd === '!slots') {
         let reply = "**Current Slots:**\n";
-
         for (const slot of slots) {
             const stored = slotDB.get(slot.name);
-
             if (stored?.claimedUserId) {
                 const member = await message.guild.members.fetch(stored.claimedUserId);
                 const isAbstracted = member.roles.cache.has(ABSTRACTED_ROLE);
                 const hidden = "||abstracted user||";
-
                 const shown = isAbstracted ? hidden : `<@${stored.claimedUserId}>`;
-
                 const elapsed = Date.now() - stored.claimedAt;
                 const next = Math.max(0, 4*3600*1000 - elapsed);
-
                 reply += `**${slot.name}**: ${shown} | Login: ${formatDate(stored.claimedAt)} | Next DM: ${formatDuration(next)}\n`;
-
-            } else {
-                reply += `**${slot.name}**: Free\n`;
-            }
+            } else reply += `**${slot.name}**: Free\n`;
         }
-
         message.channel.send(reply);
     }
 });
