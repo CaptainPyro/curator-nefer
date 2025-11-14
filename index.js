@@ -59,7 +59,7 @@ function formatDuration(ms) {
 }
 
 // Permission helpers: lock/unlock the category's view permission for the access role
-async async function lockCategoryPermissions(guild, slot) {
+async function lockCategoryPermissions(guild, slot) {
   try {
     let channel = guild.channels.cache.get(slot.channelId);
     if (!channel) channel = await guild.channels.fetch(slot.channelId).catch(() => null);
@@ -68,9 +68,8 @@ async async function lockCategoryPermissions(guild, slot) {
   } catch (err) {
     console.error(`Failed to lock permissions for ${slot.name}:`, err);
   }
-}
 
-async function unlockCategoryPermissions(guild, slot) {
+asasync function unlockCategoryPermissions(guild, slot) {
   try {
     let channel = guild.channels.cache.get(slot.channelId);
     if (!channel) channel = await guild.channels.fetch(slot.channelId).catch(() => null);
@@ -80,21 +79,8 @@ async function unlockCategoryPermissions(guild, slot) {
     console.error(`Failed to unlock permissions for ${slot.name}:`, err);
   }
 }
-}
 
-async function unlockCategoryPermissions(guild, slot) {
-  try {
-    let category = guild.channels.cache.get(slot.categoryId);
-    if (!category) category = await guild.channels.fetch(slot.categoryId).catch(() => null);
-    if (!category) return;
-    // setting to null will remove the overwrite and fall back to default
-    await category.permissionOverwrites.edit(slot.accessRoleId, { ViewChannel: null });
-  } catch (err) {
-    console.error(`Failed to unlock permissions for ${slot.name}:`, err);
-  }
-}
-
-// Send login message: if the user has the ABSTRACTED_ROLE, send the abstracted message
+// Send login messageif the user has the ABSTRACTED_ROLE, send the abstracted message
 async function sendLoginMessage(channel, member, slotName) {
   const isAbstracted = member.roles?.cache?.has(ABSTRACTED_ROLE);
   const msg = isAbstracted
