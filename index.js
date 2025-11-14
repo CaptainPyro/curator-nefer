@@ -19,6 +19,7 @@ const client = new Client({
 });
 
 // -------------------- CONFIG --------------------
+const dashboardID = '1438801491052990556';
 const directoryChannelId = '1426096588509548636';
 const ABSTRACTED_ROLE = '1438761961897852958'; // role that requests privacy
 
@@ -95,10 +96,22 @@ async function unlockCategoryPermissions(guild, slot) {
 
 // Send login message: if the user has the ABSTRACTED_ROLE, send the abstracted message
 async function sendLoginMessage(channel, member, slotName) {
-  const isAbstracted = member.roles.cache.has(ABSTRACTED_ROLE);
-  if (isAbstracted) {
-    // abstracted message (bold 'abstracted user')
-    return channel.send(`An **abstracted user** is now logged into **${slotName}**!`);
+  const isAbstracted = member.roles?.cache?.has(ABSTRACTED_ROLE);
+  const msg = isAbstracted
+    ? `An **abstracted user** is now logged into **${slotName}**!`
+    : `<@${member.id}> is now logged into **${slotName}**!`;
+
+  // send to slot channel
+  const sent = await channel.send(msg);
+
+  // also send to dashboard
+  try {
+    const dash = await client.channels.fetch(dashboardID);
+    await dash.send(msg);
+  } catch {}
+
+  return sent;
+}**!`);
   } else {
     return channel.send(`<@${member.id}> is now logged into **${slotName}**!`);
   }
@@ -256,6 +269,13 @@ Total Time Played: ${formatDuration(logout - login)}`
   // ephemeral announcement in channel
   const chan = await client.channels.fetch(slot.channelId).catch(() => null);
   if (chan) chan.send(`**${slot.name}** slot is now free.`).then(m => setTimeout(() => m.delete().catch(() => {}), 10000)).catch(() => {});
+
+  // also send to dashboard
+  try {
+    const dash = await client.channels.fetch(dashboardID);
+    await dash.send(`**${slot.name}** slot is now free.`);
+  } catch {}
+  ** slot is now free.`).then(m => setTimeout(() => m.delete().catch(() => {}), 10000)).catch(() => {});
 });
 
 // -------------------- COMMANDS --------------------
@@ -311,7 +331,13 @@ Total Time Played: ${formatDuration(logout - login)}`
     }
 
     slotDB.set(slot.name, { statusMessageId: slot.statusMessageId, claimedUserId: null, loginMessageId: null, claimedAt: null });
-    return message.reply(`${slot.name} slot has been force freed.`);
+    // also send to dashboard
+    try {
+      const dash = await client.channels.fetch(dashboardID);
+      await dash.send(`**${slot.name}** slot has been force freed.`);
+    } catch {}
+
+    return message.reply(`${slot.name} slot has been force freed`.`);
   }
 
   // List slots
