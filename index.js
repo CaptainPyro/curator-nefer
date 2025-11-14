@@ -69,7 +69,7 @@ async function lockCategoryPermissions(guild, slot) {
     console.error(`Failed to lock permissions for ${slot.name}:`, err);
   }
 
-asasync function unlockCategoryPermissions(guild, slot) {
+async function unlockCategoryPermissions(guild, slot) {
   try {
     let channel = guild.channels.cache.get(slot.channelId);
     if (!channel) channel = await guild.channels.fetch(slot.channelId).catch(() => null);
