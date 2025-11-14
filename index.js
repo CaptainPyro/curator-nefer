@@ -2,7 +2,7 @@
 const keepAlive = require('./keep_alive.js');
 keepAlive();
 
-// Discord + Enmap
+// Discord and Enmap
 const { Client, GatewayIntentBits, Partials, PermissionFlagsBits } = require('discord.js');
 const Enmap = require('enmap').default;
 
@@ -19,10 +19,11 @@ const client = new Client({
 });
 
 // -------------------- CONFIG --------------------
-const directoryChannelId = "1426096588509548636";
-const dashboardID = "1438801491052990556";   // << send status here too
-const ABSTRACTED_ROLE = "1438761961897852958";
+const directoryChannelId = '1426096588509548636';
+const dashboardID = '1438801491052990556';
+const ABSTRACTED_ROLE = "1438761961897852958"; // Abstracted role ID
 
+// Slot list
 const slots = [
     { name: "Anaxagoras", channelId: "1406663875855650977", roleId: "1426087099521830973", emoji: "✅", statusMessageId: "1426091781061214262", timer: null },
     { name: "Kantoku", channelId: "1424270783697518704", roleId: "1426087197668544523", emoji: "✅", statusMessageId: "1426092140131254366", timer: null },
@@ -34,67 +35,57 @@ const slots = [
     { name: "Ying Hua", channelId: "1436655490129068124", roleId: "1436654621127872584", emoji: "✅", statusMessageId: "1437009499666907156", timer: null }
 ];
 
-// DB
 const slotDB = new Enmap({ name: "slots", autoFetch: true, fetchAll: false });
 
 // -------------------- HELPERS --------------------
 function formatDate(ms) {
-    const d = new Date(ms + (5.5 * 3600 * 1000)); // IST offset
-    const dd = String(d.getUTCDate()).padStart(2, '0');
-    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
-    const yyyy = d.getUTCFullYear();
-    const hh = String(d.getUTCHours()).padStart(2, '0');
-    const min = String(d.getUTCMinutes()).padStart(2, '0');
-    return `${dd}-${mm}-${yyyy}, ${hh}:${min}`;
+    const d = new Date(ms + 5.5 * 60 * 60 * 1000);
+    return `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}, ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
 
 function formatDuration(ms) {
-    const s = Math.floor(ms / 1000);
-    const h = String(Math.floor(s / 3600)).padStart(2, '0');
-    const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
-    return `${h}:${m}`;
+    const total = Math.floor(ms / 1000);
+    return `${String(Math.floor(total / 3600)).padStart(2, '0')}:${String(Math.floor((total % 3600) / 60)).padStart(2, '0')}`;
 }
 
-async function sendStatusToBothChannels(slotChannel, slotName, member, abstracted) {
-    const dash = await client.channels.fetch(dashboardID);
-
-    const msg = abstracted
+async function sendLoginMessage(channel, dashboard, member, slotName) {
+    const isAbstracted = member.roles.cache.has(ABSTRACTED_ROLE);
+    const msg = isAbstracted
         ? `An **abstracted user** is now logged into **${slotName}**!`
         : `<@${member.id}> is now logged into **${slotName}**!`;
 
-    await slotChannel.send(msg);
-    await dash.send(msg);
-
-    return msg;
+    const chMsg = await channel.send(msg);
+    await dashboard.send(msg);
+    return chMsg;
 }
 
-// -------------------- CHANNEL LOCKING --------------------
-async function lockChannelPermissions(guild, slot, member) {
+// -------------------- PERMISSION LOCK/UNLOCK --------------------
+async function lockChannelPermissions(guild, slot, accessRoleId) {
     const channel = await guild.channels.fetch(slot.channelId);
-    const role = await guild.roles.fetch(slot.roleId);
+    if (!channel) return;
 
-    await channel.permissionOverwrites.edit(role, {
+    await channel.permissionOverwrites.edit(accessRoleId, {
         ViewChannel: false
     });
 }
 
-async function unlockChannelPermissions(guild, slot) {
+async function unlockChannelPermissions(guild, slot, accessRoleId) {
     const channel = await guild.channels.fetch(slot.channelId);
-    const role = await guild.roles.fetch(slot.roleId);
+    if (!channel) return;
 
-    await channel.permissionOverwrites.edit(role, {
+    await channel.permissionOverwrites.edit(accessRoleId, {
         ViewChannel: true
     });
 }
 
 // -------------------- TIMER --------------------
-function startTimer(slot, remainingTime = 4 * 3600 * 1000) {
+function startTimer(slot, remainingTime = 4 * 60 * 60 * 1000) {
     if (slot.timer) {
         clearTimeout(slot.timer);
         clearInterval(slot.timer);
     }
 
-    const TWO_HOURS = 2 * 3600 * 1000;
+    const TWO_HOURS = 2 * 60 * 60 * 1000;
 
     slot.timer = setTimeout(async () => {
         const stored = slotDB.get(slot.name);
@@ -104,111 +95,99 @@ function startTimer(slot, remainingTime = 4 * 3600 * 1000) {
         await user.send(`Are you still logged into **${slot.name}**? If not, please unreact.`);
 
         slot.timer = setInterval(async () => {
-            const repeat = slotDB.get(slot.name);
-            if (!repeat?.claimedUserId) {
+            const r = slotDB.get(slot.name);
+            if (!r?.claimedUserId) {
                 clearInterval(slot.timer);
                 slot.timer = null;
                 return;
             }
-            const usr = await client.users.fetch(repeat.claimedUserId);
-            await usr.send(`Reminder: You are still logged into **${slot.name}**. Unreact if done.`);
-        }, TWO_HOURS);
 
+            const u = await client.users.fetch(r.claimedUserId);
+            await u.send(`Reminder: You are still logged into **${slot.name}**.`);
+        }, TWO_HOURS);
     }, remainingTime);
 }
 
 // -------------------- READY --------------------
-client.once("ready", async () => {
+client.once('clientReady', async () => {
     console.log(`Logged in as ${client.user.tag}`);
 
     for (const slot of slots) {
         const channel = await client.channels.fetch(slot.channelId);
-        let message;
+        let msg;
 
-        try {
-            message = await channel.messages.fetch(slot.statusMessageId);
-        } catch {
-            console.error(`Missing status message for ${slot.name}`);
-            continue;
-        }
+        try { msg = await channel.messages.fetch(slot.statusMessageId); }
+        catch { console.error(`Missing status message for ${slot.name}`); continue; }
 
-        if (!message.reactions.cache.has(slot.emoji))
-            await message.react(slot.emoji);
+        if (!msg.reactions.cache.has(slot.emoji)) await msg.react(slot.emoji);
 
         const stored = slotDB.get(slot.name);
-
         if (stored?.claimedUserId) {
             try {
                 const member = await channel.guild.members.fetch(stored.claimedUserId);
+                await member.roles.add(slot.roleId);
 
-                if (!member.roles.cache.has(slot.roleId))
-                    await member.roles.add(slot.roleId);
+                let loginMsg;
+                try {
+                    loginMsg = await channel.messages.fetch(stored.loginMessageId);
+                } catch {
+                    const dashboard = await client.channels.fetch(dashboardID);
+                    loginMsg = await sendLoginMessage(channel, dashboard, member, slot.name);
 
-                await lockChannelPermissions(channel.guild, slot, member);
+                    stored.loginMessageId = loginMsg.id;
+                    slotDB.set(slot.name, stored);
+                }
 
                 const elapsed = Date.now() - stored.claimedAt;
-                const remaining = Math.max(0, 4 * 3600 * 1000 - elapsed);
-
-                startTimer(slot, remaining);
+                startTimer(slot, Math.max(0, 4 * 3600 * 1000 - elapsed));
             } catch (err) {
-                console.error(`Restore failed for ${slot.name}:`, err);
+                console.error(`Restoring slot failed for ${slot.name}`, err);
             }
         }
     }
 });
 
-// -------------------- REACTION ADD --------------------
-client.on("messageReactionAdd", async (reaction, user) => {
+// -------------------- REACTIONS --------------------
+client.on('messageReactionAdd', async (reaction, user) => {
     if (user.bot) return;
     if (reaction.partial) await reaction.fetch();
 
-    const slot = slots.find(s =>
-        s.channelId === reaction.message.channel.id &&
-        s.emoji === reaction.emoji.name
-    );
-
+    const slot = slots.find(s => s.channelId === reaction.message.channel.id && s.emoji === reaction.emoji.name);
     if (!slot) return;
 
     const stored = slotDB.get(slot.name);
-    const guild = reaction.message.guild;
-    const member = await guild.members.fetch(user.id);
 
     if (!stored?.claimedUserId) {
-        await member.roles.add(slot.roleId);
-        await lockChannelPermissions(guild, slot, member);
+        const guild = reaction.message.guild;
+        const member = await guild.members.fetch(user.id);
 
-        const abstracted = member.roles.cache.has(ABSTRACTED_ROLE);
-        const sent = await sendStatusToBothChannels(
-            reaction.message.channel,
-            slot.name,
-            member,
-            abstracted
-        );
+        await member.roles.add(slot.roleId);
+
+        await lockChannelPermissions(guild, slot, slot.roleId);
+
+        const dashboard = await client.channels.fetch(dashboardID);
+        const loginMsg = await sendLoginMessage(reaction.message.channel, dashboard, member, slot.name);
 
         slotDB.set(slot.name, {
             statusMessageId: slot.statusMessageId,
             claimedUserId: user.id,
-            loginMessageId: null,
+            loginMessageId: loginMsg.id,
             claimedAt: Date.now()
         });
 
         startTimer(slot);
     } else {
-        await reaction.users.remove(user.id);
-        user.send(`Someone is already logged into **${slot.name}**.`);
+        reaction.users.remove(user.id);
+        const dm = await client.users.fetch(user.id);
+        await dm.send(`Someone is already logged into **${slot.name}**.`);
     }
 });
 
-// -------------------- REACTION REMOVE (LOG OUT) --------------------
-client.on("messageReactionRemove", async (reaction, user) => {
+client.on('messageReactionRemove', async (reaction, user) => {
     if (user.bot) return;
     if (reaction.partial) await reaction.fetch();
 
-    const slot = slots.find(s =>
-        s.channelId === reaction.message.channel.id &&
-        s.emoji === reaction.emoji.name
-    );
-
+    const slot = slots.find(s => s.channelId === reaction.message.channel.id && s.emoji === reaction.emoji.name);
     if (!slot) return;
 
     const stored = slotDB.get(slot.name);
@@ -217,8 +196,15 @@ client.on("messageReactionRemove", async (reaction, user) => {
     const guild = reaction.message.guild;
     const member = await guild.members.fetch(user.id);
 
+    await unlockChannelPermissions(guild, slot, slot.roleId);
     await member.roles.remove(slot.roleId);
-    await unlockChannelPermissions(guild, slot);
+
+    if (stored.loginMessageId) {
+        try {
+            const m = await reaction.message.channel.messages.fetch(stored.loginMessageId);
+            await m.delete().catch(() => {});
+        } catch {}
+    }
 
     if (slot.timer) {
         clearTimeout(slot.timer);
@@ -226,15 +212,20 @@ client.on("messageReactionRemove", async (reaction, user) => {
         slot.timer = null;
     }
 
+    const log = await client.channels.fetch(directoryChannelId);
+
     const login = stored.claimedAt;
     const logout = Date.now();
 
-    const abstracted = member.roles.cache.has(ABSTRACTED_ROLE);
-    const hidden = `||<@${user.id}>||`;
+    const isAbstracted = member.roles.cache.has(ABSTRACTED_ROLE);
+    const userText = isAbstracted ? `||<@${stored.claimedUserId}>|| (abstracted user)` : `<@${stored.claimedUserId}>`;
 
-    const log = await client.channels.fetch(directoryChannelId);
     await log.send(
-        `Slot: ${slot.name}\nUser: ${abstracted ? `${hidden} (abstracted)` : `<@${user.id}>`}\nLogin: ${formatDate(login)}\nLogout: ${formatDate(logout)}\nPlayed: ${formatDuration(logout - login)}`
+        `**Slot:** ${slot.name}\n` +
+        `**User:** ${userText}\n` +
+        `**Login:** ${formatDate(login)}\n` +
+        `**Logout:** ${formatDate(logout)}\n` +
+        `**Played:** ${formatDuration(logout - login)}`
     );
 
     slotDB.set(slot.name, {
@@ -244,62 +235,17 @@ client.on("messageReactionRemove", async (reaction, user) => {
         claimedAt: null
     });
 
-    reaction.message.channel.send(`**${slot.name}** is now free.`)
+    reaction.message.channel.send(`**${slot.name}** slot is now free.`)
         .then(m => setTimeout(() => m.delete(), 10000));
 });
 
 // -------------------- COMMANDS --------------------
-client.on("messageCreate", async message => {
-    if (!message.content.startsWith("!") || message.author.bot) return;
-
+client.on('messageCreate', async message => {
+    if (!message.content.startsWith('!') || message.author.bot) return;
     const args = message.content.split(/ +/);
     const cmd = args.shift().toLowerCase();
 
-    if (cmd === "!free") {
-        if (!message.member.permissions.has(PermissionFlagsBits.Administrator))
-            return message.reply("No permission.");
-
-        const name = args[0];
-        const slot = slots.find(s => s.name.toLowerCase() === name?.toLowerCase());
-        if (!slot) return message.reply("Invalid slot.");
-
-        const stored = slotDB.get(slot.name);
-        if (!stored?.claimedUserId) return message.reply("Already free.");
-
-        const guild = message.guild;
-        const member = await guild.members.fetch(stored.claimedUserId);
-
-        await member.roles.remove(slot.roleId);
-        await unlockChannelPermissions(guild, slot);
-
-        if (slot.timer) {
-            clearTimeout(slot.timer);
-            clearInterval(slot.timer);
-            slot.timer = null;
-        }
-
-        const login = stored.claimedAt;
-        const logout = Date.now();
-
-        const abstracted = member.roles.cache.has(ABSTRACTED_ROLE);
-        const hidden = `||<@${stored.claimedUserId}>||`;
-
-        const log = await client.channels.fetch(directoryChannelId);
-        await log.send(
-            `Slot: ${slot.name}\nUser: ${abstracted ? `${hidden} (abstracted)` : `<@${member.id}>`}\nLogin: ${formatDate(login)}\nLogout: ${formatDate(logout)}\nPlayed: ${formatDuration(logout - login)}`
-        );
-
-        slotDB.set(slot.name, {
-            statusMessageId: slot.statusMessageId,
-            claimedUserId: null,
-            loginMessageId: null,
-            claimedAt: null
-        });
-
-        return message.reply(`${slot.name} force-freed.`);
-    }
-
-    if (cmd === "!slots") {
+    if (cmd === '!slots') {
         let reply = "**Current Slots:**\n";
 
         for (const slot of slots) {
@@ -307,20 +253,15 @@ client.on("messageCreate", async message => {
 
             if (stored?.claimedUserId) {
                 const member = await message.guild.members.fetch(stored.claimedUserId);
-                const abstracted = member.roles.cache.has(ABSTRACTED_ROLE);
+                const isAbstracted = member.roles.cache.has(ABSTRACTED_ROLE);
 
-                const shown = abstracted ? "||abstracted user||" : `<@${stored.claimedUserId}>`;
-
-                const elapsed = Date.now() - stored.claimedAt;
-                const next = Math.max(0, 4 * 3600 * 1000 - elapsed);
-
-                reply += `**${slot.name}**: ${shown} | Login: ${formatDate(stored.claimedAt)} | Next DM: ${formatDuration(next)}\n`;
+                reply += `**${slot.name}**: ${isAbstracted ? "||abstracted user||" : `<@${stored.claimedUserId}>`} | Login: ${formatDate(stored.claimedAt)}\n`;
             } else {
                 reply += `**${slot.name}**: Free\n`;
             }
         }
 
-        message.channel.send(reply);
+        return message.channel.send(reply);
     }
 });
 
