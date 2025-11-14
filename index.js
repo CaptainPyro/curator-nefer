@@ -58,7 +58,7 @@ function formatDuration(ms) {
 }
 
 // Permission helpers: lock/unlock the category's view permission for the access role
-async async function lockCategoryPermissions(guild, slot) {
+async function lockCategoryPermissions(guild, slot) {
   try {
     let channel = guild.channels.cache.get(slot.channelId);
     if (!channel) channel = await guild.channels.fetch(slot.channelId).catch(() => null);
