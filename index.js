@@ -2,7 +2,6 @@
 const keepAlive = require('./keep_alive.js');
 keepAlive();
 
-// Discord & Enmap
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const Enmap = require('enmap').default;
 
@@ -19,9 +18,12 @@ const client = new Client({
 });
 
 // ---------------- CONFIG ----------------
-const DASHBOARD_ID = '1438801491052990556';
-const DIRECTORY_ID = '1426096588509548636';
+const DASHBOARD_CHANNEL_ID = '1438801491052990556';
+const DIRECTORY_CHANNEL_ID = '1426096588509548636';
+const REMINDER_LOG_CHANNEL_ID = '1450317266339102750';
 const ABSTRACTED_ROLE = '1438761961897852958';
+
+const REMINDER_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
 
 const slots = [
     { name: "Anaxagoras", channelId: "1406663875855650977", roleId: "1426087099521830973", emoji: "✅", statusMessageId: "1426091781061214262" },
@@ -34,31 +36,45 @@ const slots = [
     { name: "Ying Hua", channelId: "1436655490129068124", roleId: "1436654621127872584", emoji: "✅", statusMessageId: "1437009499666907156" }
 ];
 
+// ---------------- STORAGE ----------------
 const slotDB = new Enmap({ name: "slots" });
+const reminderTimers = new Map(); // slotName -> interval
 
 // ---------------- HELPERS ----------------
-function formatDate(ms) {
-    const d = new Date(ms);
-    return d.toISOString().replace('T', ' ').slice(0, 16);
+function formatIST(ms) {
+    const d = new Date(ms + 5.5 * 60 * 60 * 1000);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
 
 function formatDuration(ms) {
-    const s = Math.floor(ms / 1000);
-    const h = String(Math.floor(s / 3600)).padStart(2, '0');
-    const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+    const total = Math.floor(ms / 1000);
+    const h = String(Math.floor(total / 3600)).padStart(2, '0');
+    const m = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
     return `${h}:${m}`;
 }
 
-async function sendLogin(channel, dashboard, member, slot) {
-    const abstracted = member.roles.cache.has(ABSTRACTED_ROLE);
-    const text = abstracted
-        ? `An **abstracted user** logged into **${slot.name}**`
-        : `<@${member.id}> logged into **${slot.name}**`;
+// ---------------- REMINDER ----------------
+function startReminder(slot, userId) {
+    stopReminder(slot.name);
 
-    const msg1 = await channel.send(text);
-    const msg2 = await dashboard.send(text);
+    const interval = setInterval(async () => {
+        try {
+            const user = await client.users.fetch(userId);
+            await user.send(`⏰ Reminder: You are still logged into **${slot.name}**.`);
 
-    return { slotMsgId: msg1.id, dashMsgId: msg2.id };
+            const log = await client.channels.fetch(REMINDER_LOG_CHANNEL_ID);
+            log.send(`Reminder sent to <@${userId}> for **${slot.name}**`);
+        } catch {}
+    }, REMINDER_INTERVAL);
+
+    reminderTimers.set(slot.name, interval);
+}
+
+function stopReminder(slotName) {
+    if (reminderTimers.has(slotName)) {
+        clearInterval(reminderTimers.get(slotName));
+        reminderTimers.delete(slotName);
+    }
 }
 
 // ---------------- READY ----------------
@@ -68,6 +84,7 @@ client.once('clientReady', async () => {
     for (const slot of slots) {
         const channel = await client.channels.fetch(slot.channelId);
         const msg = await channel.messages.fetch(slot.statusMessageId);
+
         if (!msg.reactions.cache.has(slot.emoji)) {
             await msg.react(slot.emoji);
         }
@@ -86,22 +103,30 @@ client.on('messageReactionAdd', async (reaction, user) => {
     if (!slot) return;
 
     const stored = slotDB.get(slot.name);
-    if (stored?.userId) {
-        await reaction.users.remove(user.id);
+    if (stored?.claimedUserId) {
+        reaction.users.remove(user.id);
         return;
     }
 
     const member = await reaction.message.guild.members.fetch(user.id);
     await member.roles.add(slot.roleId);
 
-    const dashboard = await client.channels.fetch(DASHBOARD_ID);
-    const msgs = await sendLogin(reaction.message.channel, dashboard, member, slot);
+    const isAbstracted = member.roles.cache.has(ABSTRACTED_ROLE);
+    const text = isAbstracted
+        ? `An **abstracted user** logged into **${slot.name}**`
+        : `<@${user.id}> is logged into **${slot.name}**`;
+
+    const statusMsg = await reaction.message.channel.send(text);
+    const dashMsg = await client.channels.fetch(DASHBOARD_CHANNEL_ID).then(c => c.send(text));
 
     slotDB.set(slot.name, {
-        userId: user.id,
-        loginAt: Date.now(),
-        ...msgs
+        claimedUserId: user.id,
+        claimedAt: Date.now(),
+        statusMessageId: statusMsg.id,
+        dashboardMessageId: dashMsg.id
     });
+
+    startReminder(slot, user.id);
 });
 
 client.on('messageReactionRemove', async (reaction, user) => {
@@ -115,40 +140,36 @@ client.on('messageReactionRemove', async (reaction, user) => {
     if (!slot) return;
 
     const stored = slotDB.get(slot.name);
-    if (!stored || stored.userId !== user.id) return;
+    if (stored?.claimedUserId !== user.id) return;
+
+    stopReminder(slot.name);
 
     const guild = reaction.message.guild;
     const member = await guild.members.fetch(user.id);
     await member.roles.remove(slot.roleId);
 
-    const channel = reaction.message.channel;
-    const dashboard = await client.channels.fetch(DASHBOARD_ID);
-    const directory = await client.channels.fetch(DIRECTORY_ID);
-
-    // Delete login messages
-    try { await channel.messages.delete(stored.slotMsgId); } catch {}
-    try { await dashboard.messages.delete(stored.dashMsgId); } catch {}
-
-    const login = stored.loginAt;
+    const login = stored.claimedAt;
     const logout = Date.now();
 
-    await directory.send(
-        `Slot: ${slot.name}\n` +
-        `User: <@${user.id}>\n` +
-        `Login: ${formatDate(login)}\n` +
-        `Logout: ${formatDate(logout)}\n` +
-        `Total Time Played: ${formatDuration(logout - login)}`
+    const log = await client.channels.fetch(DIRECTORY_CHANNEL_ID);
+    log.send(
+`Slot: ${slot.name}
+User: <@${user.id}>
+Login: ${formatIST(login)}
+Logout: ${formatIST(logout)}
+Total Time Played: ${formatDuration(logout - login)}`
     );
 
-    const freeText = `**${slot.name}** slot is now free.`;
-    const m1 = await channel.send(freeText);
-    const m2 = await dashboard.send(freeText);
-    setTimeout(() => {
-        m1.delete().catch(() => {});
-        m2.delete().catch(() => {});
-    }, 10000);
-
     slotDB.delete(slot.name);
+
+    const freeMsg = `**${slot.name}** slot is now free.`;
+    const chMsg = await reaction.message.channel.send(freeMsg);
+    const dashMsg = await client.channels.fetch(DASHBOARD_CHANNEL_ID).then(c => c.send(freeMsg));
+
+    setTimeout(() => {
+        chMsg.delete().catch(()=>{});
+        dashMsg.delete().catch(()=>{});
+    }, 10000);
 });
 
 client.login(process.env.DISCORD_TOKEN);
