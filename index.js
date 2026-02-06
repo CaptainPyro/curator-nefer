@@ -80,13 +80,17 @@ client.once('clientReady', async () => {
     console.log(`Logged in as ${client.user.tag}`);
 
     for (const slot of slots) {
-        const channel = await client.channels.fetch(slot.channelId);
-        const msg = await channel.messages.fetch(slot.statusMessageId);
-        if (!msg.reactions.cache.has(slot.emoji)) await msg.react(slot.emoji);
+        try {
+            const channel = await client.channels.fetch(slot.channelId);
+            const msg = await channel.messages.fetch(slot.statusMessageId);
+            if (!msg.reactions.cache.has(slot.emoji)) await msg.react(slot.emoji);
+        } catch (error) {
+            console.error(`Failed to fetch/react to slot ${slot.name}:`, error.message);
+        }
     }
 });
 
-// -------------------- LOGIN --------------------
+// -------------------- LOGIN LOGIC --------------------
 client.on('messageReactionAdd', async (reaction, user) => {
     if (user.bot) return;
     if (reaction.partial) await reaction.fetch();
@@ -125,7 +129,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
     startReminder(slot.name, user.id);
 });
 
-// -------------------- LOGOUT --------------------
+// -------------------- LOGOUT LOGIC --------------------
 client.on('messageReactionRemove', async (reaction, user) => {
     if (user.bot) return;
     if (reaction.partial) await reaction.fetch();
@@ -169,7 +173,13 @@ Total Time Played: ${formatDuration(now - data.loginAt)}`
     slotDB.delete(slot.name);
 });
 
-// -------------------- LOGIN --------------------
-console.log("Attempting to log in..."); // Add this to confirm code reaches here
+// -------------------- DEBUG & CONNECT --------------------
+
+// Debug listener: This prints EVERYTHING the bot tries to do. 
+// Remove this after you fix the issue, or your logs will be huge.
+client.on("debug", (e) => console.log(e));
+
+console.log("Attempting to log in...");
+
 client.login(process.env.DISCORD_TOKEN)
-  .catch(err => console.error("🚨 LOGIN ERROR:", err));
+    .catch(err => console.error("🚨 LOGIN ERROR:", err));
