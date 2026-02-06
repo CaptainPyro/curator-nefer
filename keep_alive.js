@@ -21,8 +21,11 @@ server.get('/ping', (req, res) => {
 });
 
 function keepAlive() {
-  server.listen(3000, () => {
-    console.log('🌐 Server is ready — keep-alive is active!');
+  // CRITICAL FIX: Use Render's port (process.env.PORT) or fallback to 3000
+  const PORT = process.env.PORT || 3000;
+  
+  server.listen(PORT, () => {
+    console.log(`🌐 Server is ready on port ${PORT} — keep-alive is active!`);
   });
 }
 
