@@ -175,11 +175,13 @@ Total Time Played: ${formatDuration(now - data.loginAt)}`
 
 // -------------------- DEBUG & CONNECT --------------------
 
-// Debug listener: This prints EVERYTHING the bot tries to do. 
-// Remove this after you fix the issue, or your logs will be huge.
+// Debug listener for detailed connection steps
 client.on("debug", (e) => console.log(e));
 
 console.log("Attempting to log in...");
+
+// THE SANITY CHECK: Prints the first 5 chars of the token if it exists
+console.log("Token Check:", process.env.DISCORD_TOKEN ? `Loaded (${process.env.DISCORD_TOKEN.substring(0, 5)}...)` : "❌ NO TOKEN FOUND");
 
 client.login(process.env.DISCORD_TOKEN)
     .catch(err => console.error("🚨 LOGIN ERROR:", err));
