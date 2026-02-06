@@ -170,4 +170,6 @@ Total Time Played: ${formatDuration(now - data.loginAt)}`
 });
 
 // -------------------- LOGIN --------------------
-client.login(process.env.DISCORD_TOKEN);
+console.log("Attempting to log in..."); // Add this to confirm code reaches here
+client.login(process.env.DISCORD_TOKEN)
+  .catch(err => console.error("🚨 LOGIN ERROR:", err));
